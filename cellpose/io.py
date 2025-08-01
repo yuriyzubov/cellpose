@@ -54,10 +54,10 @@ def logger_setup(cp_path=".cellpose", logfile_name="run.log", stdout_file_replac
         log_file.unlink()
     except:
         print('creating new log file')
-    handlers = [logging.FileHandler(log_file),]
     if stdout_file_replacement is not None:
         handlers = [logging.FileHandler(stdout_file_replacement),]
     else:
+        handlers = [logging.FileHandler(log_file),]
         handlers.append(logging.StreamHandler(sys.stdout))
     logging.basicConfig(
                     level=logging.INFO,
