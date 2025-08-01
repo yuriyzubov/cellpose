@@ -486,7 +486,7 @@ def process_block(
     print('RUNNING BLOCK: ', block_index, '\tREGION: ', crop, flush=True)
     segmentation = read_preprocess_and_segment(
         input_zarr, crop, preprocessing_steps, model_kwargs, eval_kwargs,
-        worker_logs_directory,
+        worker_logs_directory, block_index,
     )
     segmentation, crop = remove_overlaps(
         segmentation, crop, overlap, blocksize,
@@ -510,6 +510,7 @@ def read_preprocess_and_segment(
     model_kwargs,
     eval_kwargs,
     worker_logs_directory,
+    block_index,
 ):
     """Read block from zarr array, run all preprocessing steps, run cellpose"""
     image = input_zarr[crop]
@@ -518,7 +519,8 @@ def read_preprocess_and_segment(
         image = pp_step[0](image, **pp_step[1])
     log_file=None
     if worker_logs_directory is not None:
-        log_file = f'dask_worker_{distributed.get_worker().name}.log'
+        block_index_str = 'x'.join([str(x) for x in block_index])
+        log_file = f'block_output_{block_index_str}_{distributed.get_worker().name}.log'
         log_file = pathlib.Path(worker_logs_directory).joinpath(log_file)
     cellpose.io.logger_setup(stdout_file_replacement=log_file)
     model = cellpose.models.CellposeModel(**model_kwargs)
@@ -706,9 +708,8 @@ def distributed_eval(
         ID is the first tuple in the list, the largest segment ID is the last
         tuple in the list.
     """
-
     timestamp = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
-    worker_logs_dirname = f'dask_worker_logs_{timestamp}'
+    worker_logs_dirname = f'block_output_logs_{timestamp}'
     worker_logs_dir = pathlib.Path().absolute().joinpath(worker_logs_dirname)
     worker_logs_dir.mkdir()
 
@@ -749,6 +750,7 @@ def distributed_eval(
             worker_logs_directory=str(worker_logs_dir),
         )
         results = cluster.client.gather(futures)
+        del futures
         if isinstance(cluster, dask_jobqueue.core.JobQueueCluster): 
             cluster.scale(0)
 
@@ -756,7 +758,6 @@ def distributed_eval(
         boxes = [box for sublist in boxes_ for box in sublist]
         box_ids = np.concatenate(box_ids_).astype(int)  # unsure how but without cast these are float64
         new_labeling = determine_merge_relabeling(block_indices, faces, box_ids)
-        debug_unique = np.unique(new_labeling)
         new_labeling_path = temporary_directory + '/new_labeling.npy'
         np.save(new_labeling_path, new_labeling)
 
