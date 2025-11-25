@@ -367,6 +367,7 @@ def cluster(func):
 def process_block(
     block_index,
     crop,
+    core_crop,
     input_zarr,
     model_kwargs,
     eval_kwargs,
@@ -401,6 +402,9 @@ def process_block(
 
     crop : tuple of slice objects
         The bounding box of the data to read from the input_zarr array
+
+    core_crop : tuple of slice objects
+        The bounding box of the crop minus overlaps
 
     input_zarr : zarr.core.Array
         The image data we want to segment
@@ -489,7 +493,7 @@ def process_block(
         worker_logs_directory, block_index,
     )
     segmentation, crop = remove_overlaps(
-        segmentation, crop, overlap, blocksize,
+        segmentation, crop, core_crop,
     )
     boxes = bounding_boxes_in_global_coordinates(segmentation, crop)
     nblocks = get_nblocks(input_zarr.shape, blocksize)
@@ -527,25 +531,15 @@ def read_preprocess_and_segment(
     return model.eval(image, **eval_kwargs)[0].astype(np.uint32)
 
 
-def remove_overlaps(array, crop, overlap, blocksize):
-    """overlaps only there to provide context for boundary voxels
-       and can be removed after segmentation is complete
-       reslice array to remove the overlaps"""
-    crop_trimmed = list(crop)
-    for axis in range(array.ndim):
-        if crop[axis].start != 0:
-            slc = [slice(None),]*array.ndim
-            slc[axis] = slice(overlap, None)
-            array = array[tuple(slc)]
-            a, b = crop[axis].start, crop[axis].stop
-            crop_trimmed[axis] = slice(a + overlap, b)
-        if array.shape[axis] > blocksize[axis]:
-            slc = [slice(None),]*array.ndim
-            slc[axis] = slice(None, blocksize[axis])
-            array = array[tuple(slc)]
-            a = crop_trimmed[axis].start
-            crop_trimmed[axis] = slice(a, a + blocksize[axis])
-    return array, crop_trimmed
+def remove_overlaps(array, crop, core_crop):
+    _crop = []
+    for x, y in zip(crop, core_crop):
+        start = y.start - x.start
+        stop = y.stop - x.stop
+        if start < 0: start = 0
+        if stop >= 0: stop = None
+        _crop.append(slice(start, stop))
+    return array[tuple(_crop)], core_crop
 
 
 def bounding_boxes_in_global_coordinates(segmentation, crop):
@@ -601,6 +595,7 @@ def distributed_eval(
     input_zarr,
     blocksize,
     write_path,
+    overlap=None,
     mask=None,
     preprocessing_steps=[],
     model_kwargs={},
@@ -642,6 +637,13 @@ def distributed_eval(
 
     write_path : string
         The location of a zarr file on disk where you'd like to write your results
+
+    overlap : int (default: None)
+        The number of voxels added to the block size on each side of each axis
+        to create an overlapping area of computation. Larger overlaps increase
+        computation time and memory requirements, but also ensure better consistency
+        of segmentation results at block boundaries. If None, then twice the average
+        cell diameter is used.
 
     mask : numpy.ndarray (default: None)
         A foreground mask for the image data; may be at a different resolution
@@ -715,8 +717,9 @@ def distributed_eval(
 
     if 'diameter' not in eval_kwargs.keys():
         eval_kwargs['diameter'] = 30
-    overlap = eval_kwargs['diameter'] * 2
-    block_indices, block_crops = get_block_crops(
+    if overlap is None:
+        overlap = eval_kwargs['diameter'] * 2
+    block_indices, block_crops, core_crops = get_block_crops(
         input_zarr.shape, blocksize, overlap, mask,
     )
 
@@ -740,6 +743,7 @@ def distributed_eval(
             process_block,
             block_indices,
             block_crops,
+            core_crops,
             input_zarr=input_zarr,
             preprocessing_steps=preprocessing_steps,
             model_kwargs=model_kwargs,
@@ -796,9 +800,14 @@ def get_block_crops(shape, blocksize, overlap, mask):
         ratio = np.array(mask.shape) / shape
         mask_blocksize = np.round(ratio * blocksize).astype(int)
 
-    indices, crops = [], []
+    indices, crops, core_crops = [], [], []
     nblocks = get_nblocks(shape, blocksize)
     for index in np.ndindex(*nblocks):
+        start = blocksize * index
+        stop = start + blocksize
+        stop = np.minimum(shape, stop)
+        core_crop = tuple(slice(x, y) for x, y in zip(start, stop))
+
         start = blocksize * index - overlap
         stop = start + blocksize + 2 * overlap
         start = np.maximum(0, start)
@@ -815,7 +824,8 @@ def get_block_crops(shape, blocksize, overlap, mask):
         if foreground:
             indices.append(index)
             crops.append(crop)
-    return indices, crops
+            core_crops.append(core_crop)
+    return indices, crops, core_crops
 
 
 def determine_merge_relabeling(block_indices, faces, used_labels):
