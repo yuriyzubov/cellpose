@@ -774,8 +774,8 @@ def distributed_eval(
                 ncpus=1,
                 memory="15GB",
                 mem=int(15e9),
-                queue=None,
-                job_extra_directives=[],
+                queue=cluster.locals_store['kwargs']['queue'],
+                job_extra_directives=cluster.locals_store['kwargs']['job_extra_directives'],
             )
     
         segmentation_da = dask.array.from_zarr(temp_zarr)
