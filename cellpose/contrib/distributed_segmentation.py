@@ -733,7 +733,8 @@ def distributed_eval(
 
         temp_zarr_path = temporary_directory + '/segmentation_unstitched.zarr'
         temp_zarr = zarr.open(
-            temp_zarr_path, 'w',
+            store=temp_zarr_path,
+            mode = 'w',
             shape=input_zarr.shape,
             chunks=blocksize,
             dtype=np.uint32,
