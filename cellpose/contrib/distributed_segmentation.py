@@ -887,6 +887,8 @@ def block_face_adjacency_graph(faces, nlabels):
         face = np.concatenate((a, b), axis=np.argmin(a.shape))
         mapped = dask_image.ndmeasure._utils._label._across_block_label_grouping(face, structure)
         all_mappings.append(mapped)
+    if not all_mappings:
+        return scipy.sparse.coo_matrix((nlabels+1, nlabels+1)).tocsr()
     i, j = np.concatenate(all_mappings, axis=1)
     v = np.ones_like(i)
     return scipy.sparse.coo_matrix((v, (i, j)), shape=(nlabels+1, nlabels+1)).tocsr()
